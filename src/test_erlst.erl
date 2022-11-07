@@ -10,14 +10,6 @@
 % 'test_'.
 % But you MUST have a module (this file) called test_erlst.
 
-
-%% account_map : key 为account_id(), value为holdings()
-%% offers_map : key 为offer_id(), value为 {account_id(), offer()}
-%%-record(account_data, {current_account_num::integer(), account_map}).
-%%-record(offer_data, {current_offer_num::integer(), offers_map} ).
-%%-record(se_server_data, {accounts, offers}).
-
-
 test_all() ->
   test_launch(),
   test_open_account(),
@@ -26,7 +18,7 @@ test_all() ->
   test_make_offer2(),
   test_make_offer3(),
   test_rescind_offer(),
-%%  test_rescind_offer2(),
+  test_rescind_offer2(),
   ok.
 
 test_everything() ->
@@ -137,36 +129,32 @@ test_rescind_offer() ->
   erlst:rescind_offer(Account1, {OfferId, Server}),
   io:format("test_rescind_offer ok ~n").
 
-%%test_rescind_offer2() ->
-%%  {ok, A} = erlst:launch(),
-%%  {ok, B} = erlst:launch(),
-%%  InputHolding1 = {100, [{"a", 10}, {"b", 10}]},
-%%  InputHolding2 = {200, [{"a", 2}, {"b", 20}]},
-%%  Account1 = erlst:open_account(A, InputHolding1),
-%%  Account2 = erlst:open_account(B, InputHolding2),
-%%  {ok, {OfferId, Server}} = erlst:make_offer(Account1, {"a", 12}),
-%%  {ok, {OfferId2, Server2}} = erlst:make_offer(Account1, {"a", 18}),
-%%  ?assertMatch(OfferId, 1),
-%%  ?assertMatch(Server, A),
-%%  ?assertMatch(OfferId2, 2),
-%%  ?assertMatch(Server2, A),
-%%  erlst:rescind_offer(Account1, {OfferId, Server}),
-%%  AccountMap = maps:new(),
-%%  AccountMap = maps:put({1, A}, {100, [{"b", 10},{"a", 9}]}, AccountMap),
-%%  OfferMap = maps:new(),
-%%  OfferMap = maps:put({2, A}, {100, {{1,a},{"a",18}}}, OfferMap),
-%%  RightState = #se_server_data{
-%%    accounts=#account_data{current_account_num = 1, account_map = AccountMap},
-%%    offers=#offer_data{ current_offer_num=2, offers_map = OfferMap}
-%%  },
-%%  State = erlst:observe_state(A),
-%%  ?assertMatch( State, RightState),
-%%
-%%  {ok, {OfferId3, Server3}} = erlst:make_offer(Account2, {"a", 100}),
-%%  {ok, {OfferId4, Server4}} = erlst:make_offer(Account2, {"a", 18}),
-%%  ?assertMatch(OfferId3, 1),
-%%  ?assertMatch(Server3, B),
-%%  ?assertMatch(OfferId4, 2),
-%%  ?assertMatch(Server4, B),
-%%  io:format("test_rescind_offer2 ok ~n").
+test_rescind_offer2() ->
+  {ok, A} = erlst:launch(),
+  {ok, B} = erlst:launch(),
+  InputHolding1 = {100, [{"a", 10}, {"b", 10}]},
+  InputHolding2 = {200, [{"a", 2}, {"b", 20}]},
+  Account1 = erlst:open_account(A, InputHolding1),
+  Account2 = erlst:open_account(B, InputHolding2),
+  {ok, {OfferId, Server}} = erlst:make_offer(Account1, {"a", 12}),
+  {ok, {OfferId2, Server2}} = erlst:make_offer(Account1, {"a", 18}),
+  ?assertMatch(OfferId, 1),
+  ?assertMatch(Server, A),
+  ?assertMatch(OfferId2, 2),
+  ?assertMatch(Server2, A),
+  erlst:rescind_offer(Account1, {OfferId, Server}),
+
+  OfferMap = maps:new(),
+  OfferMap1 = maps:put({2, A}, {{1,A},{"a",18}}, OfferMap),
+  RightState = maps:to_list(OfferMap1),
+  State = erlst:observe_state(A),
+  ?assertMatch(State, RightState),
+
+  {ok, {OfferId3, Server3}} = erlst:make_offer(Account2, {"a", 100}),
+  {ok, {OfferId4, Server4}} = erlst:make_offer(Account2, {"a", 18}),
+  ?assertMatch(OfferId3, 1),
+  ?assertMatch(Server3, B),
+  ?assertMatch(OfferId4, 2),
+  ?assertMatch(Server4, B),
+  io:format("test_rescind_offer2 ok ~n").
 

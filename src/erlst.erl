@@ -46,6 +46,10 @@
 launch() ->
     gen_server:start_link(?MODULE, [] ,[]).
 
+%% for debug only, return State in gen_server for test use.
+observe_state(S) ->
+  gen_server:call(S, {observe_state_offers}).
+
 -spec shutdown(S :: stock_exchange()) -> non_neg_integer().
 shutdown(_) ->
     not_implemented.
@@ -79,9 +83,6 @@ add_trader(_, _) ->
 remove_trader(_, _) ->
     not_implemented.
 
-%% for debug only, return State in gen_server for test use.
-observe_state(S) ->
-  gen_server:call(S, {observe_state}).
 
 init(_) ->
   State = #se_server_data{
@@ -91,8 +92,9 @@ init(_) ->
   {ok,  State}.
 
 %% for open_account request
-handle_call({observe_state}, _From, State) ->
-  {reply, State, State};
+handle_call({observe_state_offers}, _From, State) ->
+  OfferList = maps:to_list((State#se_server_data.offers)#offer_data.offers_map),
+  {reply, OfferList, State};
 
 %% for open_account request
 handle_call({open_account , Holdings}, _From, State) ->
