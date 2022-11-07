@@ -13,8 +13,11 @@
   make_offer/2,
   rescind_offer/2,
   add_trader/2,
-  remove_trader/2
-  , init/1, handle_call/3, handle_cast/2]).
+  remove_trader/2,
+  observe_state/1,
+  init/1,
+  handle_call/3,
+  handle_cast/2]).
 
 % You may have other exports as well
 -export([]).
@@ -76,12 +79,20 @@ add_trader(_, _) ->
 remove_trader(_, _) ->
     not_implemented.
 
+%% for debug only, return State in gen_server for test use.
+observe_state(S) ->
+  gen_server:call(S, {observe_state}).
+
 init(_) ->
   State = #se_server_data{
     accounts=#account_data{current_account_num = 0, account_map = maps:new()},
     offers=#offer_data{ current_offer_num=0, offers_map = maps:new()}
   },
   {ok,  State}.
+
+%% for open_account request
+handle_call({observe_state}, _From, State) ->
+  {reply, State, State};
 
 %% for open_account request
 handle_call({open_account , Holdings}, _From, State) ->
@@ -113,10 +124,12 @@ handle_call({make_offer , Acct, Offer}, _From, State) ->
 
 %% for rescind_offer request
 handle_cast({rescind_offer, Acct, OfferId}, State) ->
+  io:format("State before rescind_offer :  ~p ~n", [State]),
   {_, Offer} = get_offer_data( State#se_server_data.offers, OfferId),
   NewState = delete_offer(State, OfferId),
   {StockName, _} = Offer,
   NewState2 = increase_account_stock_num(NewState, Acct, StockName),
+  io:format("State after rescind_offer :  ~p ~n", [NewState2]),
   {noreply,NewState2}.
 
 %% account utils functions
@@ -150,7 +163,9 @@ increase_account_stock_num(State, AccountId, StockName) ->
     { _ , Amount} ->
       NewStockInfo = {StockName , Amount + 1},
       NewStockList = lists:delete({StockName, Amount}, StockList) ++ [NewStockInfo],
-      State#se_server_data{accounts = maps:update(AccountId, {CurrentMoney, NewStockList}, AccountMap)}
+      NewAccountMap = maps:update(AccountId, {CurrentMoney, NewStockList}, AccountMap),
+      NewAccountsData = (State#se_server_data.accounts)#account_data{account_map = NewAccountMap},
+      State#se_server_data{accounts = NewAccountsData}
   end.
 
 %% offer utils function
