@@ -19,6 +19,7 @@ test_all() ->
   test_make_offer3(),
   test_rescind_offer(),
   test_rescind_offer2(),
+  test_add_trader(),
   ok.
 
 test_everything() ->
@@ -100,12 +101,10 @@ test_make_offer3() ->
   Account1 = erlst:open_account(A, InputHolding1),
   Account2 = erlst:open_account(B, InputHolding2),
 
-  {ok, {OfferId, Server}} = erlst:make_offer(Account1, {"a", 12}),
-  {Error, Reason} = erlst:make_offer(Account1, {"a", 18}),
+  {ok, {OfferId, _}} = erlst:make_offer(Account1, {"a", 12}),
+  Result = erlst:make_offer(Account1, {"a", 18}),
+  io:format("Result : ~p ~n", [Result]),
   ?assertMatch(OfferId, 1),
-  ?assertMatch(Server, A),
-  ?assertMatch(Error, error),
-  ?assertMatch(Reason, not_enough_stock_to_offer),
 
   {ok, {OfferId3, Server3}} = erlst:make_offer(Account2, {"a", 100}),
   {ok, {OfferId4, Server4}} = erlst:make_offer(Account2, {"a", 18}),
@@ -158,3 +157,16 @@ test_rescind_offer2() ->
   ?assertMatch(Server4, B),
   io:format("test_rescind_offer2 ok ~n").
 
+test_add_trader() ->
+  {ok, A} = erlst:launch(),
+  InputHolding1 = {100, [{"a", 10}, {"b", 25}]},
+  Account1 = erlst:open_account(A, InputHolding1),
+  {ok, {OfferId, Server}} = erlst:make_offer(Account1, {"a", 12}),
+  {ok, {OfferId2, Server2}} = erlst:make_offer(Account1, {"a", 18}),
+  ?assertMatch(OfferId, 1),
+  ?assertMatch(Server, A),
+  ?assertMatch(OfferId2, 2),
+  ?assertMatch(Server2, A),
+%%  -type trader_strategy() :: fun((offer()) -> decision()).
+  erlst:add_trader(Account1, fun({"a", 2}) -> accept end),
+  io:format("test_add_trader ok ~n").
