@@ -49,7 +49,7 @@ handle_cast({new_offer, OfferElem}, State) ->
   Strategy = get_strategy_from_state(State),
   CurOffersMap = get_cur_offers_from_state(State),
   {Key, Value} = OfferElem,
-  NewCurOffersMap = maps:update(Key , Value, CurOffersMap),
+  NewCurOffersMap = maps:put(Key , Value, CurOffersMap),
   NewState = set_cur_offers(State, NewCurOffersMap),
   CurOffersList = maps:to_list(NewCurOffersMap),
   NewState2 = implement_strategy_to_offers(NewState, CurOffersList, Strategy),

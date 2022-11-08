@@ -36,11 +36,11 @@
 -type trader_strategy() :: fun((offer()) -> decision()).
 
 
-%% account_map : key 为account_id(), value为holdings()
+%% account_map : key account_id(), value holdings()
 -record(account_data, {current_account_num::integer(), account_map}).
-%% offers_map : key 为offer_id(), value为 {account_id(), offer()}
+%% offers_map : key offer_id(), value {account_id(), offer()}
 -record(offer_data, {current_offer_num::integer(), offers_map} ).
-%% trader_map : key trader_id(), value trader_pid
+%% trader_map : key trader_id(), value {trader_pid, Strategy, AccountId }
 -record(trader_data, {current_trader_num::integer(), traders_map}).
 -record(se_server_data, {accounts, offers, traders}).
 
@@ -187,13 +187,13 @@ handle_call({account_balance , AccountId}, _From, State) ->
 
 %% for make_offer request
 handle_call({make_offer , Acct, Offer}, _From, State) ->
-  Holdings = get_account_by_id(State , Acct),
-  case check_valid_offer(Offer, Holdings) of
+  case check_valid_offer(Offer) of
     true ->
       {OfferId, NewState} = add_offer(self(), State, Acct, Offer),
+      notify_all_trader_new_offer(NewState, OfferId, Offer, Acct),
       {reply, {ok, OfferId}, NewState};
     false ->
-      {reply, {error, not_enough_stock_to_offer}, State}
+      {reply, {error, invalid_offer}, State}
   end;
 
 handle_call({add_trader, Strategy, AccountId}, _From, State) ->
@@ -211,6 +211,25 @@ handle_call({add_trader, Strategy, AccountId}, _From, State) ->
 handle_cast({rescind_offer, _Acct, OfferId}, State) ->
   NewState = delete_offer(State, OfferId),
   {noreply,NewState}.
+
+%%key offer_id(), value {account_id(), offer()}
+%%{trader_pid, Strategy, AccountId }
+notify_all_trader_new_offer(State, TraderList, OfferId, Offer, AccountId)->
+  case TraderList of
+    [X | XS] ->
+      {_, TraderValue} = X,
+      {TraderPid , _, _} = TraderValue,
+      OfferElem = {OfferId, {AccountId, Offer}},
+      trader:new_offer(TraderPid, OfferElem),
+      notify_all_trader_new_offer(State, XS, OfferId, Offer, AccountId);
+    [] ->
+      nothing
+  end.
+
+notify_all_trader_new_offer(State, OfferId, Offer, AccountId) ->
+  TradersMap = get_traders_map(State),
+  TradersList = maps:to_list(TradersMap),
+  notify_all_trader_new_offer(State, TradersList, OfferId, Offer, AccountId).
 
 %% account utils functions
 add_account(State, Server, Holdings) ->
@@ -234,20 +253,21 @@ delete_offer(State, OfferId) ->
   NewOffersMap = maps:remove(OfferId, OffersMap),
   State#se_server_data{offers =(State#se_server_data.offers)#offer_data{offers_map = NewOffersMap}}.
 
-check_own_stock(StockName, Holding) ->
-  { _, StockList} = Holding,
-  case lists:keyfind(StockName , 1, StockList) of
-    false -> false;
-    {_, Amount} ->
-      if
-        Amount > 0 -> true;
-        true -> false
-      end
-  end.
 
-check_valid_offer(Offer, Holdings) ->
-  {StockName1, _} = Offer,
-  check_own_stock(StockName1, Holdings).
+check_valid_offer(Offer) ->
+  {StockName, Price} = Offer,
+  case is_atom(StockName) of
+    true ->
+      case is_integer(Price) of
+        true ->
+          case Price >= 0 of
+            true -> true;
+            false -> false
+          end;
+        false -> false
+      end;
+    false -> false
+  end.
 
 %% api for get data quickly from State
 get_accounts_data(State) ->
@@ -320,14 +340,23 @@ update_seller_holding(State, SellerAccountId, StockName, Price) ->
   Holding = get_account_by_id(State, SellerAccountId),
   {CurMoney, StockList} = Holding,
   {_, Amount} = lists:keyfind(StockName, 1, StockList),
-  NewStockList = lists:delete( {StockName, Amount} ,StockList) ++ [{StockName, Amount - 1}],
+  NewStockList = case Amount - 1 of
+    0 -> lists:delete({StockName, Amount} ,StockList);
+    _ -> lists:delete({StockName, Amount} ,StockList) ++ [{StockName, Amount - 1}]
+  end,
   NewHolding = {CurMoney + Price, NewStockList},
   set_account_by_id(State, SellerAccountId, NewHolding).
 
 update_buyer_holding(State, BuyerAccountId, StockName, Price) ->
   Holding = get_account_by_id(State, BuyerAccountId),
   {CurMoney, StockList} = Holding,
-  {_, Amount} = lists:keyfind(StockName, 1, StockList),
-  NewStockList = lists:delete({StockName, Amount} ,StockList) ++ [{StockName, Amount + 1}],
-  NewHolding = {CurMoney - Price, NewStockList},
-  set_account_by_id(State, BuyerAccountId, NewHolding).
+  case lists:keyfind(StockName, 1, StockList) of
+    false ->
+      NewStockList = StockList ++ [{StockName, 1}],
+      NewHolding = {CurMoney - Price, NewStockList},
+      set_account_by_id(State, BuyerAccountId, NewHolding);
+    {_, Amount} ->
+      NewStockList = lists:delete({StockName, Amount} ,StockList) ++ [{StockName, Amount + 1}],
+      NewHolding = {CurMoney - Price, NewStockList},
+      set_account_by_id(State, BuyerAccountId, NewHolding)
+  end.
