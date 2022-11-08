@@ -45,13 +45,6 @@ handle_cast({try_accept_all_offers}, State) ->
   NewState = implement_strategy_to_offers(State, CurOffersList, Strategy),
   {noreply, NewState};
 
-handle_cast({keep_offer, OfferId}, State) ->
-  Strategy = get_strategy_from_state(State),
-  CurOffers = get_cur_offers_from_state(State),
-  CurOffersList = maps:to_list(CurOffers),
-  NewState = implement_strategy_to_offers(State, CurOffersList, Strategy),
-  {noreply, NewState};
-
 handle_cast({new_offer, OfferElem}, State) ->
   Strategy = get_strategy_from_state(State),
   CurOffersMap = get_cur_offers_from_state(State),
@@ -66,25 +59,33 @@ accept_offer(State , OfferElem, OfferId) ->
   Sup = get_sup_from_state(State),
   AccountId = get_accounts_id_state(State),
   case erlst:accept_offer(Sup, OfferElem, AccountId) of
-    keep_trader_offer -> nothing;
-    delete_trader_offer-> delete_offer_by_id(State, OfferId)
+    keep_trader_offer ->
+      io:format("[trader process] get response from server~n"),
+      State;
+    delete_trader_offer->
+      io:format("[trader process] get response from server delete offer ~n"),
+      delete_offer_by_id(State, OfferId)
   end.
 
 %% account_map : key 为account_id(), value为holdings()
 %% offers_map : key 为offer_id(), value为 {account_id(), offer()}
 implement_strategy_to_offers(State, CurOffersList, Strategy) ->
   case CurOffersList of
-    [x | xs] ->
-      {Key, Value} = x,
+    [X |XS] ->
+      {Key, Value} = X,
       {_, Offer} = Value,
       case Strategy(Offer) of
         accept ->
-          accept_offer(State, x, Key);
+          io:format("[trader process] accept offer~n"),
+          NewState = accept_offer(State, X, Key),
+          implement_strategy_to_offers(NewState, XS, Strategy);
         reject ->
+          io:format("[trader process] reject offer~n"),
           NewState = delete_offer_by_id(State, Key),
-          implement_strategy_to_offers(NewState, xs, Strategy)
+          implement_strategy_to_offers(NewState, XS, Strategy)
       end;
     [] ->
+      io:format("[trader process] implement_strategy_to_offers done ~n"),
       State
   end.
 

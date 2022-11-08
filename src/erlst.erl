@@ -112,9 +112,12 @@ check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountI
   end.
 
 check_buyer_has_enough_money(State, Offer, BuyerAccountId) ->
-  {_,{ _, Price}} = Offer,
+  { _, Price} = Offer,
   case get_account_by_id(State, BuyerAccountId) of
-    account_do_not_exist -> false;
+    account_do_not_exist ->
+      io:format("[Server process] State :~n~p~nBuyerAccountId:~p~n", [State, BuyerAccountId]),
+      io:format("[server process] check_buyer_has_enough_money account_do_not_exist ~n"),
+      false;
     {CurMoney, _} ->
       if
         CurMoney >= Price -> true;
@@ -155,16 +158,20 @@ handle_call({observe_state_offers}, _From, State) ->
   {reply, OfferList, State};
 
 handle_call({accept_offer, OfferElem, AccountId}, _From, State) ->
+  io:format("[server process] server get accept_offer request ~n"),
   {OfferId, {SellerAccountId, Offer}} = OfferElem,
-  {BuyerAccountId, _} = AccountId,
-  Result = case check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountId) of
+  BuyerAccountId = AccountId,
+  case check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountId) of
     ok ->
-      execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId),
-      delete_trader_offer;
-    offer_do_not_exist -> delete_trader_offer;
-    _ ->  keep_trader_offer
-  end,
-  {reply, Result, State};
+      io:format("[server process] before make deal: ~n~p ~n", [State]),
+      NewState = execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId),
+      io:format("[server process] after make deal: ~n~p ~n", [NewState]),
+      {reply, delete_trader_offer, NewState};
+    offer_do_not_exist -> {reply, delete_trader_offer, State};
+    Other ->
+      io:format("[server process] check_accepted_offer_valid result: ~p ~n", [Other]),
+      {reply, keep_trader_offer, State}
+  end;
 
 %% for open_account request
 handle_call({open_account , Holdings}, _From, State) ->
@@ -194,9 +201,10 @@ handle_call({add_trader, Strategy, AccountId}, _From, State) ->
   TraderId = get_current_trader_num(State) + 1,
   NewState = set_current_trader_num(State, TraderId),
   TraderValue = {TraderPid, Strategy, AccountId},
-  TradeMap = get_traders_map(NewState),
-  NewTradeMap = maps:update(TraderId, TraderValue, TradeMap),
+  TraderMap = get_traders_map(NewState),
+  NewTradeMap = maps:put(TraderId, TraderValue, TraderMap),
   NewState2 = set_traders_map(NewState, NewTradeMap),
+  io:format("[server process] add trader successfully ~n"),
   {reply, {TraderId}, NewState2}.
 
 %% for rescind_offer request

@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 
--export([test_all/0, test_everything/0]).
+-export([test_all/0, test_everything/0,test_add_trader1/0, test_all_add_trader/0, test_add_trader2/0]).
 -export([]). % Remember to export the other functions from Q2.2
 
 % You are allowed to split your testing code in as many files as you
@@ -19,7 +19,7 @@ test_all() ->
   test_make_offer3(),
   test_rescind_offer(),
   test_rescind_offer2(),
-  test_add_trader(),
+  test_all_add_trader(),
   ok.
 
 test_everything() ->
@@ -157,7 +157,12 @@ test_rescind_offer2() ->
   ?assertMatch(Server4, B),
   io:format("test_rescind_offer2 ok ~n").
 
-test_add_trader() ->
+test_all_add_trader() ->
+  test_add_trader1(),
+  test_add_trader2().
+
+%% seller and buyer are the same account
+test_add_trader1() ->
   {ok, A} = erlst:launch(),
   InputHolding1 = {100, [{"a", 10}, {"b", 25}]},
   Account1 = erlst:open_account(A, InputHolding1),
@@ -167,6 +172,27 @@ test_add_trader() ->
   ?assertMatch(Server, A),
   ?assertMatch(OfferId2, 2),
   ?assertMatch(Server2, A),
-%%  -type trader_strategy() :: fun((offer()) -> decision()).
-  erlst:add_trader(Account1, fun({"a", 2}) -> accept end),
-  io:format("test_add_trader ok ~n").
+  erlst:add_trader(Account1, fun(_Offer) -> accept end),
+  io:format("[test process] test_add_trader1 ok ~n").
+
+%% In my design, the buyer and seller can be same account, so the behaviour of this
+%% test is not deterministic, but we can make sure the final sum of money account1 and
+%% account2 have is 100, and the sum of amount of stock "a" they have is 110.
+test_add_trader2() ->
+  {ok, A} = erlst:launch(),
+  InputHolding1 = {100, [{"a", 10}]},
+  InputHolding2 = {0, [{"a", 100}]},
+  Account1 = erlst:open_account(A, InputHolding1),
+  Account2 = erlst:open_account(A, InputHolding2),
+  erlst:make_offer(Account1, {"a", 3}),
+  erlst:make_offer(Account1, {"a", 2}),
+  erlst:make_offer(Account2, {"a", 1}),
+  erlst:make_offer(Account2, {"a" ,1}),
+  erlst:make_offer(Account2, {"a" ,1}),
+  erlst:make_offer(Account2, {"a" ,1}),
+  erlst:make_offer(Account2, {"a" ,1}),
+  erlst:add_trader(Account1, fun({_StockName, Price}) -> if Price < 2 -> accept; true -> reject end end),
+  erlst:add_trader(Account2, fun(_Offer) -> accept end),
+  io:format("[test process] test_add_trader2 ok ~n").
+
+
