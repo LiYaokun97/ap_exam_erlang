@@ -262,8 +262,35 @@ handle_cast({remove_trader, TraderId}, State) ->
 handle_cast({rescind_offer, _Acct, OfferId}, State) ->
 %%   todo when rescind offer, should notify child process to stop running strategy on this offer.
   NewState = delete_offer(State, OfferId),
-  {noreply,NewState}.
+  shutdown_all_traders(NewState),
+  OldTraderMaps = get_traders_map(NewState),
+  OldTraderList = maps:to_list(OldTraderMaps),
+  NewState2 = set_traders_map(NewState, maps:new()),
+  NewState3 = restart_all_traders(NewState2, OldTraderList),
+  {noreply, NewState3}.
 
+restart_trader({Strategy, AccountId, TraderId}, State) ->
+  Sup = get_supervisor(State),
+  ChildSpec = [Strategy, self(), get_offers_map(State) , AccountId, TraderId],
+  Result = supervisor:start_child(Sup, ChildSpec),
+  io:format("[server process] start_child result: ~p~n",[Result]),
+  {_, TraderPid} = Result,
+  TraderValue = {TraderPid, Strategy, AccountId},
+  TraderMap = get_traders_map(State),
+  NewTradeMap = maps:put(TraderId, TraderValue, TraderMap),
+  NewState2 = set_traders_map(State, NewTradeMap),
+  io:format("[server process] add trader successfully ~n"),
+  {TraderId, NewState2}.
+
+restart_all_traders(State, TraderList) ->
+  case TraderList of
+    [X|XS] ->
+      {TraderId, {_, Strategy, AccountId}} = X,
+      {_, NewState} = restart_trader({Strategy, AccountId, TraderId}, State),
+      restart_all_traders(NewState, XS);
+    [] ->
+      State
+  end.
 
 shutdown_trader_list(Sup, TradersList) ->
   case TradersList of
