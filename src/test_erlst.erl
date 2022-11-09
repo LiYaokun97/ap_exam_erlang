@@ -3,7 +3,7 @@
 
 
 -export([test_all/0, test_everything/0,test_add_trader1/0, test_all_add_trader/0, test_add_trader2/0, test_add_trader3/0,
-test_add_trader4/0, test_remove_trader/0, test_shutdown/0]).
+test_add_trader4/0, test_remove_trader/0, test_shutdown/0, test_exception_strategy/0]).
 -export([]). % Remember to export the other functions from Q2.2
 
 % You are allowed to split your testing code in as many files as you
@@ -22,6 +22,7 @@ test_all() ->
   test_rescind_offer2(),
   test_all_add_trader(),
   test_shutdown(),
+  test_exception_strategy(),
   ok.
 
 test_everything() ->
@@ -253,3 +254,18 @@ test_shutdown() ->
   erlst:make_offer(Account1, {c, 6}),
   erlst:shutdown(A),
   io:format("[test process] test_shutdown ok ~n").
+
+strategy_exception({_StockName, _Price}) ->
+  io:format("[test process] strategy_exception ~n"),
+  X = 100/0,
+  X.
+
+test_exception_strategy() ->
+  {ok, A} = erlst:launch(),
+  InputHolding1 = {12, [{a, 1},{b, 1}, {c, 2}]},
+  Account1 = erlst:open_account(A, InputHolding1),
+  erlst:make_offer(Account1, {a, 2}),
+  erlst:add_trader(Account1, fun({StockName, Price}) -> strategy_exception({StockName, Price}) end),
+  erlst:make_offer(Account1, {c, 6}),
+  io:format("[test process] test_exception_strategy ok ~n").
+

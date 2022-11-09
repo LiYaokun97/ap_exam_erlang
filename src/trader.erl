@@ -76,7 +76,13 @@ implement_strategy_to_offers(State, CurOffersList, Strategy) ->
     [X |XS] ->
       {Key, Value} = X,
       {_, Offer} = Value,
-      case Strategy(Offer) of
+      Result = try Strategy(Offer) of
+        accept -> accept;
+        reject -> reject
+      catch
+        _:_ -> reject
+      end,
+      case Result of
         accept ->
           io:format("[trader process] accept offer~n"),
           NewState = accept_offer(State, X, Key),

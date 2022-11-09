@@ -300,28 +300,6 @@ notify_all_trader_new_offer(State, OfferId, Offer, AccountId) ->
   TradersList = maps:to_list(TradersMap),
   notify_all_trader_new_offer(State, TradersList, OfferId, Offer, AccountId).
 
-%% account utils functions
-add_account(State, Server, Holdings) ->
-  Id = get_current_account_num(State) + 1,
-  NewAccountMap = maps:put({Id, Server}, Holdings , get_accounts_map(State)),
-  NewState1 = set_accounts_map(State, NewAccountMap),
-  NewState2 = set_current_account_num(NewState1, Id),
-  {{Id, Server}, NewState2}.
-
-%% offer utils function
-add_offer(Server, State, Acct, Offer) ->
-  Offers = State#se_server_data.offers,
-  Id = Offers#offer_data.current_offer_num + 1,
-  NewOfferMap = maps:put({Id, Server}, {Acct, Offer} , Offers#offer_data.offers_map),
-  NewOffers = Offers#offer_data{current_offer_num = Id, offers_map = NewOfferMap},
-  NewState = State#se_server_data{offers = NewOffers},
-  {{Id, Server}, NewState}.
-
-delete_offer(State, OfferId) ->
-  OffersMap = (State#se_server_data.offers)#offer_data.offers_map,
-  NewOffersMap = maps:remove(OfferId, OffersMap),
-  State#se_server_data{offers =(State#se_server_data.offers)#offer_data{offers_map = NewOffersMap}}.
-
 
 check_valid_offer(Offer) ->
   {StockName, Price} = Offer,
@@ -451,3 +429,25 @@ update_buyer_holding(State, BuyerAccountId, StockName, Price) ->
       NewHolding = {CurMoney - Price, NewStockList},
       set_account_by_id(State, BuyerAccountId, NewHolding)
   end.
+
+%% offer utils function
+add_offer(Server, State, Acct, Offer) ->
+  Offers = State#se_server_data.offers,
+  Id = Offers#offer_data.current_offer_num + 1,
+  NewOfferMap = maps:put({Id, Server}, {Acct, Offer} , Offers#offer_data.offers_map),
+  NewOffers = Offers#offer_data{current_offer_num = Id, offers_map = NewOfferMap},
+  NewState = State#se_server_data{offers = NewOffers},
+  {{Id, Server}, NewState}.
+
+delete_offer(State, OfferId) ->
+  OffersMap = (State#se_server_data.offers)#offer_data.offers_map,
+  NewOffersMap = maps:remove(OfferId, OffersMap),
+  State#se_server_data{offers =(State#se_server_data.offers)#offer_data{offers_map = NewOffersMap}}.
+
+%% account utils functions
+add_account(State, Server, Holdings) ->
+  Id = get_current_account_num(State) + 1,
+  NewAccountMap = maps:put({Id, Server}, Holdings , get_accounts_map(State)),
+  NewState1 = set_accounts_map(State, NewAccountMap),
+  NewState2 = set_current_account_num(NewState1, Id),
+  {{Id, Server}, NewState2}.
