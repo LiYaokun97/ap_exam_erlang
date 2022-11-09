@@ -12,22 +12,23 @@
 
 %% API
 -export([init/1, handle_call/3, handle_cast/2]).
--export([start_trader/4, new_offer/2]).
+-export([start_trader/5, new_offer/2]).
 
 
-start_trader(Strategy , Sup, CurOffers, AccountId) ->
-  {ok, Pid} = gen_server:start_link(?MODULE, {Sup, CurOffers, Strategy, AccountId}, []),
+start_trader(Strategy, Sup, CurOffers, AccountId, TraderId) ->
+  {ok, Pid} = gen_server:start_link(?MODULE, {Sup, CurOffers, Strategy, AccountId, TraderId}, []),
   try_accept_all_offers(Pid),
-  Pid.
+  {ok, Pid}.
 
 %% only pass AccountId to trader, the trader doesn't care the holdings in the account
-init({Sup, CurOffers, Strategy, AccountId}) ->
+init({Sup, CurOffers, Strategy, AccountId, TraderId}) ->
   MyMap = maps:new(),
   MyMap1 = maps:put("Sup", Sup, MyMap),
   MyMap2 = maps:put("CurOffers", CurOffers, MyMap1),
   MyMap3 = maps:put("Strategy", Strategy, MyMap2),
   MyMap4 = maps:put("AccountId", AccountId, MyMap3),
-  {ok,  MyMap4}.
+  MyMap5 = maps:put("TraderId", TraderId, MyMap4),
+  {ok,  MyMap5}.
 
 try_accept_all_offers(Trader) ->
   gen_server:cast(Trader, {try_accept_all_offers}).
@@ -58,7 +59,8 @@ handle_cast({new_offer, OfferElem}, State) ->
 accept_offer(State , OfferElem, OfferId) ->
   Sup = get_sup_from_state(State),
   AccountId = get_accounts_id_state(State),
-  case erlst:accept_offer(Sup, OfferElem, AccountId) of
+  TraderId = get_trader_id(State),
+  case erlst:accept_offer(Sup, OfferElem, AccountId, TraderId) of
     keep_trader_offer ->
       io:format("[trader process] get response from server~n"),
       State;
@@ -110,4 +112,5 @@ get_strategy_from_state(State) ->
 get_accounts_id_state(State) ->
   maps:get("AccountId", State).
 
-
+get_trader_id(State) ->
+  maps:get("TraderId", State).
