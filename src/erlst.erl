@@ -125,8 +125,6 @@ check_buyer_has_enough_money(State, Offer, BuyerAccountId) ->
   { _, Price} = Offer,
   case get_account_by_id(State, BuyerAccountId) of
     account_do_not_exist ->
-      io:format("[Server process] State :~n~p~nBuyerAccountId:~p~n", [State, BuyerAccountId]),
-      io:format("[server process] check_buyer_has_enough_money account_do_not_exist ~n"),
       false;
     {CurMoney, _} ->
       if
@@ -173,13 +171,13 @@ execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId) ->
   NewState3 = update_executed_trades_num(NewState2),
   update_buyer_holding(NewState3, BuyerAccountId, StockName, Price).
 
-%% for open_account request
+%% for observe_state_offers request
 handle_call({observe_state_offers}, _From, State) ->
   OfferList = maps:to_list((State#se_server_data.offers)#offer_data.offers_map),
   {reply, OfferList, State};
 
 handle_call({accept_offer, OfferElem, AccountId, TraderId}, _From, State) ->
-  io:format("[server process] server get accept_offer request ~n"),
+  io:format("[server process] get accept_offer request ~n"),
   {OfferId, {SellerAccountId, Offer}} = OfferElem,
   BuyerAccountId = AccountId,
   case check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountId, TraderId) of
@@ -188,18 +186,21 @@ handle_call({accept_offer, OfferElem, AccountId, TraderId}, _From, State) ->
       NewState = execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId),
       io:format("[server process] after make deal: ~n~p ~n", [NewState]),
       {reply, delete_trader_offer, NewState};
-    offer_do_not_exist -> {reply, delete_trader_offer, State};
-    Other ->
-      io:format("[server process] check_accepted_offer_valid result: ~p ~n", [Other]),
+    offer_do_not_exist ->
+      io:format("[server process] offer do not exist ~n"),
+      {reply, delete_trader_offer, State};
+    _ ->
+      io:format("[server process] check_accepted_offer_valid result: Other ~n"),
       {reply, keep_trader_offer, State}
   end;
 
 %% for open_account request
 handle_call({open_account , Holdings}, _From, State) ->
   {AccountId, NewState} = add_account(State, self(), Holdings),
+  io:format("[server process] open_account ~p ~n",[AccountId]),
   {reply, AccountId, NewState};
 
-%% for open_account request
+%% for shutdown request
 handle_call({shutdown}, _From, State) ->
   shutdown_all_traders(State),
   NewState1 = set_accounts_map(State, maps:new()),
@@ -219,15 +220,12 @@ handle_call({make_offer , Acct, Offer}, _From, State) ->
   case check_valid_offer(Offer) of
     true ->
       {OfferId, NewState} = add_offer(self(), State, Acct, Offer),
+      io:format("[server process] add new offer Offer: ~p ~n",[Offer]),
       notify_all_trader_new_offer(NewState, OfferId, Offer, Acct),
       {reply, {ok, OfferId}, NewState};
     false ->
       {reply, {error, invalid_offer}, State}
   end;
-
-handle_call({update_trader_map_only, NewState}, _From, _State) ->
-  io:format("[server process] update_trader_map_only ~n~p~n",[NewState]),
-  {reply, {ok}, NewState};
 
 handle_call({add_trader, Strategy, AccountId}, _From, State) ->
   TraderId = get_current_trader_num(State) + 1,
@@ -235,7 +233,6 @@ handle_call({add_trader, Strategy, AccountId}, _From, State) ->
   Sup = get_supervisor(State),
   ChildSpec = [Strategy, self(), get_offers_map(State) , AccountId, TraderId],
   Result = supervisor:start_child(Sup, ChildSpec),
-  io:format("[server process] start_child result: ~p~n",[Result]),
   {_, TraderPid} = Result,
   NewState = set_current_trader_num(State, TraderId),
   TraderValue = {TraderPid, Strategy, AccountId},
@@ -254,7 +251,7 @@ handle_cast({remove_trader, TraderId}, State) ->
     {TraderPid, _, _} ->
       NewState = delete_trader_by_id(State, TraderId),
       supervisor:terminate_child(get_supervisor(State), TraderPid),
-      io:format("[server process] remove trader state ~p~n",[NewState]),
+      io:format("[server process] remove trader, newstate: ~n~p~n",[NewState]),
       {noreply, NewState}
   end;
 
@@ -401,8 +398,6 @@ get_account_by_id(State, AccountId) ->
 
 get_trader_by_id(State, TraderId) ->
   TraderMap = get_traders_map(State),
-  io:format("[server process] get_trader_by_id trader id : ~p ~n",[TraderId]),
-  io:format("[server process] get_trader_by_id :~n~p ~n",[TraderMap]),
   maps:get(TraderId, TraderMap, trader_do_not_exist).
 
 delete_offer_by_id(State, OfferId) ->

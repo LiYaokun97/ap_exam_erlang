@@ -47,6 +47,7 @@ handle_cast({try_accept_all_offers}, State) ->
   {noreply, NewState};
 
 handle_cast({new_offer, OfferElem}, State) ->
+  io:format("[trader process ~p] new offer from server: ~p ~n", [self(), OfferElem]),
   Strategy = get_strategy_from_state(State),
   CurOffersMap = get_cur_offers_from_state(State),
   {Key, Value} = OfferElem,
@@ -62,10 +63,10 @@ accept_offer(State , OfferElem, OfferId) ->
   TraderId = get_trader_id(State),
   case erlst:accept_offer(Sup, OfferElem, AccountId, TraderId) of
     keep_trader_offer ->
-      io:format("[trader process] get response from server~n"),
+      io:format("[trader process ~p] get response from server: keep_trader_offer ~n", [self()]),
       State;
     delete_trader_offer->
-      io:format("[trader process] get response from server delete offer ~n"),
+      io:format("[trader process ~p] get response from server: delete_trader_offer ~n", [self()]),
       delete_offer_by_id(State, OfferId)
   end.
 
@@ -77,23 +78,26 @@ implement_strategy_to_offers(State, CurOffersList, Strategy) ->
       {Key, Value} = X,
       {_, Offer} = Value,
       Result = try Strategy(Offer) of
-        accept -> accept;
-        reject -> reject
+        accept ->
+          accept;
+        reject ->
+          reject
       catch
-        _:_ -> reject
+        _:_ ->
+          reject
       end,
       case Result of
         accept ->
-          io:format("[trader process] accept offer~n"),
+          io:format("[trader process ~p] accept one offer: ~p ~n",[self(), Offer]),
           NewState = accept_offer(State, X, Key),
           implement_strategy_to_offers(NewState, XS, Strategy);
         reject ->
-          io:format("[trader process] reject offer~n"),
+          io:format("[trader process ~p] reject one offer:~p ~n",[self(), Offer]),
           NewState = delete_offer_by_id(State, Key),
           implement_strategy_to_offers(NewState, XS, Strategy)
       end;
     [] ->
-      io:format("[trader process] implement_strategy_to_offers done ~n"),
+      io:format("[trader process ~p] implement_strategy_to_offers done ~n",[self()]),
       State
   end.
 
