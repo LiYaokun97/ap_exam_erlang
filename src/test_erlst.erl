@@ -14,6 +14,9 @@
 
 test_all() ->
 %%   all this functions starting with 'test_' are for testing basic function in Q2.1
+  eqc:quickcheck(prop_value_preservation()),
+  eqc:quickcheck(prop_total_trades()),
+  test_eunit_erlst:test_all(),
   ok.
 
 test_everything() ->
@@ -45,7 +48,7 @@ prop_value_preservation() ->
 
 prop_total_trades() ->
   ?FORALL(
-    {S, TraderList, OfferList},
+    {S, _TraderList, OfferList},
     generate_offer_and_trader2(),
     begin
       MakeOfferNum = length(OfferList),
