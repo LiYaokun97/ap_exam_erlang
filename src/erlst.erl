@@ -13,8 +13,12 @@
   make_offer/2,
   rescind_offer/2,
   add_trader/2,
-  remove_trader/2
-  , init/1, handle_call/3, handle_cast/2]).
+  remove_trader/2,
+  observe_state/1,
+  init/1,
+  handle_call/3,
+  accept_offer/4,
+  handle_cast/2]).
 
 % You may have other exports as well
 -export([]).
@@ -32,20 +36,29 @@
 -type trader_strategy() :: fun((offer()) -> decision()).
 
 
-%% account_map : key 为account_id(), value为holdings()
-%% offers_map : key 为offer_id(), value为 {account_id(), offer()}
+%% account_map : key account_id(), value holdings()
 -record(account_data, {current_account_num::integer(), account_map}).
+%% offers_map : key offer_id(), value {account_id(), offer()}
 -record(offer_data, {current_offer_num::integer(), offers_map} ).
--record(se_server_data, {accounts, offers}).
+%% trader_map : key trader_id(), value {trader_pid, Strategy, AccountId }
+-record(trader_data, {current_trader_num::integer(), traders_map}).
+%% supervisor {SupId, }
+-record(se_server_data, {accounts, offers, traders, supervisor, executed_trades_num}).
 
 
 -spec launch() -> {ok, stock_exchange()} | {error, term()}.
 launch() ->
     gen_server:start_link(?MODULE, [] ,[]).
 
+%% for debug only, return State in gen_server for test use.
+observe_state(S) ->
+  gen_server:call(S, {observe_state_offers}).
+
 -spec shutdown(S :: stock_exchange()) -> non_neg_integer().
-shutdown(_) ->
-    not_implemented.
+shutdown(S) ->
+  ExecutedNumber = gen_server:call(S, {shutdown}),
+  gen_server:stop(S),
+  ExecutedNumber.
 
 -spec open_account(S :: stock_exchange(), holdings()) -> account_id().
 open_account(S, Holdings) ->
@@ -54,7 +67,6 @@ open_account(S, Holdings) ->
 -spec account_balance(Acct :: account_id()) -> holdings().
 account_balance(Acct) ->
   {_, ServerPid} = Acct,
-  io:format("accountId in account_balance : ~p ", [ServerPid]),
   %% todo : if ServerPid doesn't exist, crash; So should add try-catch here.
   gen_server:call(ServerPid, {account_balance, Acct}).
 
@@ -69,88 +81,375 @@ rescind_offer(Acct, OfferId) ->
   gen_server:cast(ServerPid, {rescind_offer, Acct, OfferId}).
 
 -spec add_trader(Acct :: account_id(), Strategy :: trader_strategy()) -> trader_id().
-add_trader(_, _) ->
-    not_implemented.
+add_trader(AccountId, Strategy) ->
+  {_, Server} = AccountId,
+  gen_server:call(Server, {add_trader, Strategy, AccountId}).
 
 -spec remove_trader(Acct :: account_id(), Trader :: trader_id()) -> ok.
-remove_trader(_, _) ->
-    not_implemented.
+remove_trader(AccountId, TraderId) ->
+  {_, Server} = AccountId,
+  gen_server:cast(Server, {remove_trader, TraderId}).
+
+accept_offer(S, OfferElem, AccountId, TraderId) ->
+  gen_server:call(S, {accept_offer, OfferElem, AccountId, TraderId}).
 
 init(_) ->
   State = #se_server_data{
     accounts=#account_data{current_account_num = 0, account_map = maps:new()},
-    offers=#offer_data{ current_offer_num=0, offers_map = maps:new()}
+    offers=#offer_data{ current_offer_num=0, offers_map = maps:new()},
+    traders = #trader_data{current_trader_num = 0, traders_map = maps:new()},
+    supervisor = sup:start_link(),
+    executed_trades_num = 0
   },
   {ok,  State}.
 
+check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountId, TraderId) ->
+  case check_offer_exist(State, OfferId) of
+    false -> offer_do_not_exist;
+    true ->
+      case check_seller_has_stock(State, SellerAccountId, Offer) of
+        false -> seller_do_not_have_stock;
+        true ->
+          case check_buyer_has_enough_money(State, Offer, BuyerAccountId) of
+            false -> buyer_do_not_have_enough_money;
+            true ->
+              case check_valid_trader(State, TraderId) of
+                false -> offer_do_not_exist;
+                true -> ok
+              end
+          end
+      end
+  end.
+
+check_buyer_has_enough_money(State, Offer, BuyerAccountId) ->
+  { _, Price} = Offer,
+  case get_account_by_id(State, BuyerAccountId) of
+    account_do_not_exist ->
+      false;
+    {CurMoney, _} ->
+      if
+        CurMoney >= Price -> true;
+        true -> false
+      end
+  end.
+
+check_valid_trader(State, TraderId) ->
+  case get_trader_by_id(State, TraderId) of
+    trader_do_not_exist ->
+%%      io:format("[server process] trader do not exist ~n"),
+      false;
+    _ ->
+%%      io:format("[server process] trader exist ~n"),
+      true
+  end.
+
+check_offer_exist(State, OfferId) ->
+  case get_offer_by_id(State, OfferId) of
+    offer_do_not_exist -> false;
+    _ -> true
+  end .
+
+check_seller_has_stock(State, SellerAccountId, Offer) ->
+  {StockName, _} = Offer,
+  case get_account_by_id(State, SellerAccountId) of
+    account_do_not_exist -> false;
+    {_, StockList} ->
+      case lists:keyfind(StockName, 1, StockList) of
+        false -> false;
+        {_, Amount} ->
+          if
+            Amount > 0 -> true;
+            true -> false
+          end
+      end
+  end.
+
+execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId) ->
+  NewState = delete_offer_by_id(State, OfferId),
+  {StockName, Price} = Offer,
+  NewState2 = update_seller_holding(NewState, SellerAccountId, StockName, Price),
+  NewState3 = update_executed_trades_num(NewState2),
+  update_buyer_holding(NewState3, BuyerAccountId, StockName, Price).
+
+%% for observe_state_offers request
+handle_call({observe_state_offers}, _From, State) ->
+  OfferList = maps:to_list((State#se_server_data.offers)#offer_data.offers_map),
+  {reply, OfferList, State};
+
+handle_call({accept_offer, OfferElem, AccountId, TraderId}, _From, State) ->
+%%  io:format("[server process] get accept_offer request ~n"),
+  {OfferId, {SellerAccountId, Offer}} = OfferElem,
+  BuyerAccountId = AccountId,
+  case check_accepted_offer_valid(State, OfferId, Offer, BuyerAccountId, SellerAccountId, TraderId) of
+    ok ->
+%%      io:format("[server process] before make deal: ~n~p ~n", [State]),
+      NewState = execute_trade(State, SellerAccountId, BuyerAccountId, Offer, OfferId),
+%%      io:format("[server process] after make deal: ~n~p ~n", [NewState]),
+      {reply, delete_trader_offer, NewState};
+    offer_do_not_exist ->
+%%      io:format("[server process] offer do not exist ~n"),
+      {reply, delete_trader_offer, State};
+    _ ->
+%%      io:format("[server process] check_accepted_offer_valid result: Other ~n"),
+      {reply, keep_trader_offer, State}
+  end;
+
 %% for open_account request
 handle_call({open_account , Holdings}, _From, State) ->
-  {AccountId, NewAccounts} = add_account(self(), State#se_server_data.accounts, Holdings),
-  NewState = State#se_server_data{accounts = NewAccounts},
+  {AccountId, NewState} = add_account(State, self(), Holdings),
+%%  io:format("[server process] open_account ~p ~n",[AccountId]),
   {reply, AccountId, NewState};
+
+%% for shutdown request
+handle_call({shutdown}, _From, State) ->
+  shutdown_all_traders(State),
+  NewState1 = set_accounts_map(State, maps:new()),
+  NewState2 = set_traders_map(NewState1, maps:new()),
+  ExecutedTradesNum = get_executed_trades_num(NewState2),
+  {reply, ExecutedTradesNum, NewState2};
 
 %% for account_balance request
 handle_call({account_balance , AccountId}, _From, State) ->
 %%  io:format("accountId in handle_call : ~p ~n", [AccountId]),
-  Holdings = get_account_data(State#se_server_data.accounts, AccountId),
+  Holdings = get_account_by_id(State, AccountId),
   %% todo: what if no such account?
    {reply, Holdings, State};
 
 %% for make_offer request
 handle_call({make_offer , Acct, Offer}, _From, State) ->
-  Holdings = get_account_data(State#se_server_data.accounts , Acct),
-  case check_valid_offer(Offer, Holdings) of
+  case check_valid_offer(Offer) of
     true ->
       {OfferId, NewState} = add_offer(self(), State, Acct, Offer),
-%%      io:format("NewState :  ~p ~n", [NewState]),
-      {StockName, _} = Offer,
-      NewState2 = decrease_account_stock_num(NewState, Acct, StockName),
-%%      io:format("NewState2 :  ~p ~n", [NewState2]),
-      {reply, {ok, OfferId}, NewState2};
+%%      io:format("[server process] add new offer Offer: ~p ~n",[Offer]),
+      notify_all_trader_new_offer(NewState, OfferId, Offer, Acct),
+      {reply, {ok, OfferId}, NewState};
     false ->
-      {reply, {error, not_enough_stock_to_offer}, State}
-  end.
+      {reply, {error, invalid_offer}, State}
+  end;
+
+handle_call({add_trader, Strategy, AccountId}, _From, State) ->
+  TraderId = get_current_trader_num(State) + 1,
+%%  {_, TraderPid} = trader:start_trader(Strategy, self(), get_offers_map(State) , AccountId, TraderId),
+  Sup = get_supervisor(State),
+  ChildSpec = [Strategy, self(), get_offers_map(State) , AccountId, TraderId],
+  Result = supervisor:start_child(Sup, ChildSpec),
+  {_, TraderPid} = Result,
+  NewState = set_current_trader_num(State, TraderId),
+  TraderValue = {TraderPid, Strategy, AccountId},
+  TraderMap = get_traders_map(NewState),
+  NewTradeMap = maps:put(TraderId, TraderValue, TraderMap),
+  NewState2 = set_traders_map(NewState, NewTradeMap),
+%%  io:format("[server process] add trader successfully ~n"),
+  {reply, TraderId, NewState2}.
+
+%% for open_account request
+handle_cast({remove_trader, TraderId}, State) ->
+  case get_trader_by_id(State, TraderId) of
+    trader_do_not_exist ->
+%%      io:format("[server process] remove_trader but trader_do_not_exist ~n"),
+      {noreply, State};
+    {TraderPid, _, _} ->
+      NewState = delete_trader_by_id(State, TraderId),
+      supervisor:terminate_child(get_supervisor(State), TraderPid),
+%%      io:format("[server process] remove trader, newstate: ~n~p~n",[NewState]),
+      {noreply, NewState}
+  end;
 
 %% for rescind_offer request
-handle_cast({rescind_offer, Acct, OfferId}, State) ->
-  {_, Offer} = get_offer_data( State#se_server_data.offers, OfferId),
+handle_cast({rescind_offer, _Acct, OfferId}, State) ->
+%%   todo when rescind offer, should notify child process to stop running strategy on this offer.
   NewState = delete_offer(State, OfferId),
-  {StockName, _} = Offer,
-  NewState2 = increase_account_stock_num(NewState, Acct, StockName),
-  {noreply,NewState2}.
+  shutdown_all_traders(NewState),
+  OldTraderMaps = get_traders_map(NewState),
+  OldTraderList = maps:to_list(OldTraderMaps),
+  NewState2 = set_traders_map(NewState, maps:new()),
+  NewState3 = restart_all_traders(NewState2, OldTraderList),
+  {noreply, NewState3}.
 
-%% account utils functions
-add_account(Server, Accounts, Holdings) ->
-  Id = Accounts#account_data.current_account_num + 1,
-  NewAccountMap = maps:put({Id, Server}, Holdings , Accounts#account_data.account_map),
-  NewAccounts = Accounts#account_data{current_account_num = Id, account_map = NewAccountMap},
-  {{Id, Server}, NewAccounts}.
+restart_trader({Strategy, AccountId, TraderId}, State) ->
+  Sup = get_supervisor(State),
+  ChildSpec = [Strategy, self(), get_offers_map(State) , AccountId, TraderId],
+  Result = supervisor:start_child(Sup, ChildSpec),
+%%  io:format("[server process] start_child result: ~p~n",[Result]),
+  {_, TraderPid} = Result,
+  TraderValue = {TraderPid, Strategy, AccountId},
+  TraderMap = get_traders_map(State),
+  NewTradeMap = maps:put(TraderId, TraderValue, TraderMap),
+  NewState2 = set_traders_map(State, NewTradeMap),
+%%  io:format("[server process] add trader successfully ~n"),
+  {TraderId, NewState2}.
 
-get_account_data(AccountsData ,AccountId) ->
-  maps:get(AccountId, AccountsData#account_data.account_map).
-
-decrease_account_stock_num(State, AccountId, StockName) ->
-  AccountMap = (State#se_server_data.accounts)#account_data.account_map,
-  AccountValue = maps:get(AccountId ,AccountMap),
-  {CurrentMoney, StockList} = AccountValue,
-  case lists:keyfind(StockName, 1, StockList) of
-    { _ , Amount} ->
-      NewStockInfo = {StockName , Amount - 1},
-      NewStockList = lists:delete({StockName, Amount}, StockList) ++ [NewStockInfo],
-      NewAccountMap = maps:update(AccountId, {CurrentMoney, NewStockList}, AccountMap),
-      NewAccountsData = (State#se_server_data.accounts)#account_data{account_map = NewAccountMap},
-      State#se_server_data{accounts = NewAccountsData}
+restart_all_traders(State, TraderList) ->
+  case TraderList of
+    [X|XS] ->
+      {TraderId, {_, Strategy, AccountId}} = X,
+      {_, NewState} = restart_trader({Strategy, AccountId, TraderId}, State),
+      restart_all_traders(NewState, XS);
+    [] ->
+      State
   end.
 
-increase_account_stock_num(State, AccountId, StockName) ->
-  AccountMap = (State#se_server_data.accounts)#account_data.account_map,
-  AccountValue = maps:get(AccountId ,AccountMap),
-  {CurrentMoney, StockList} = AccountValue,
+shutdown_trader_list(Sup, TradersList) ->
+  case TradersList of
+    [X|XS] ->
+      {_, {TraderPid, _, _}} = X,
+      supervisor:terminate_child(Sup, TraderPid),
+      shutdown_trader_list(Sup, XS);
+    [] ->
+      nothing
+  end.
+
+shutdown_all_traders(State) ->
+  Sup = get_supervisor(State),
+  TradesMap = get_traders_map(State),
+  TradersList = maps:to_list(TradesMap),
+  shutdown_trader_list(Sup, TradersList).
+
+%%key offer_id(), value {account_id(), offer()}
+%%{trader_pid, Strategy, AccountId }
+notify_all_trader_new_offer(State, TraderList, OfferId, Offer, AccountId)->
+  case TraderList of
+    [X | XS] ->
+      {_, TraderValue} = X,
+      {TraderPid , _, _} = TraderValue,
+      OfferElem = {OfferId, {AccountId, Offer}},
+      trader:new_offer(TraderPid, OfferElem),
+      notify_all_trader_new_offer(State, XS, OfferId, Offer, AccountId);
+    [] ->
+      nothing
+  end.
+
+notify_all_trader_new_offer(State, OfferId, Offer, AccountId) ->
+  TradersMap = get_traders_map(State),
+  TradersList = maps:to_list(TradersMap),
+  notify_all_trader_new_offer(State, TradersList, OfferId, Offer, AccountId).
+
+
+check_valid_offer(Offer) ->
+  {StockName, Price} = Offer,
+  case is_atom(StockName) of
+    true ->
+      case is_integer(Price) of
+        true ->
+          case Price >= 0 of
+            true -> true;
+            false -> false
+          end;
+        false -> false
+      end;
+    false -> false
+  end.
+
+%% api for get data quickly from State
+get_accounts_data(State) ->
+  State#se_server_data.accounts.
+
+get_offers_data(State) ->
+  State#se_server_data.offers.
+
+get_traders_data(State)->
+  State#se_server_data.traders.
+
+get_accounts_map(State) ->
+  (get_accounts_data(State))#account_data.account_map.
+
+set_accounts_map(State, NewAccountMap) ->
+  NewAccountData = (get_accounts_data(State))#account_data{account_map = NewAccountMap},
+  State#se_server_data{accounts = NewAccountData}.
+
+get_offers_map(State) ->
+  (get_offers_data(State))#offer_data.offers_map.
+
+%%set_offers_map(State, NewOffersMap) ->
+%%  NewOffersData = (get_offers_data(State))#offer_data{offers_map = NewOffersMap},
+%%  State#se_server_data{offers = NewOffersData}.
+
+get_traders_map(State) ->
+  (get_traders_data(State))#trader_data.traders_map.
+
+set_traders_map(State, NewTradersMap) ->
+  NewTradersData = (get_traders_data(State))#trader_data{ traders_map = NewTradersMap},
+  State#se_server_data{traders = NewTradersData}.
+
+get_current_trader_num(State) ->
+  (get_traders_data(State))#trader_data.current_trader_num.
+
+set_current_trader_num(State, Num) ->
+  NewTradersData = (get_traders_data(State))#trader_data{ current_trader_num = Num},
+  State#se_server_data{traders = NewTradersData}.
+
+get_current_account_num(State) ->
+  (get_accounts_data(State))#account_data.current_account_num.
+
+set_current_account_num(State, Num) ->
+  NewAccountsData = (get_accounts_data(State))#account_data{ current_account_num = Num},
+  State#se_server_data{accounts = NewAccountsData}.
+
+%%get_current_offer_num(State) ->
+%%  (get_offers_data(State))#offer_data.current_offer_num.
+
+get_offer_by_id(State, OfferId) ->
+  OfferMap = get_offers_map(State),
+  maps:get(OfferId, OfferMap, offer_do_not_exist).
+
+get_account_by_id(State, AccountId) ->
+  AccountMap = get_accounts_map(State),
+  maps:get(AccountId, AccountMap, account_do_not_exist).
+
+get_trader_by_id(State, TraderId) ->
+  TraderMap = get_traders_map(State),
+  maps:get(TraderId, TraderMap, trader_do_not_exist).
+
+delete_offer_by_id(State, OfferId) ->
+  OfferMap = get_offers_map(State),
+  NewOffersMap = maps:remove(OfferId, OfferMap),
+  NewOffersData = (get_offers_data(State))#offer_data{offers_map = NewOffersMap},
+  State#se_server_data{offers = NewOffersData}.
+
+delete_trader_by_id(State, TraderId) ->
+  TraderMap = get_traders_map(State),
+  NewTraderMap = maps:remove(TraderId, TraderMap),
+  NewTraderData = (get_traders_data(State))#trader_data{traders_map = NewTraderMap},
+  State#se_server_data{traders = NewTraderData}.
+
+get_supervisor(State) ->
+  State#se_server_data.supervisor.
+
+set_account_by_id(State, SellerAccountId, AccountValue) ->
+  AccountMap = get_accounts_map(State),
+  NewAccountMap = maps:update(SellerAccountId ,AccountValue, AccountMap),
+  set_accounts_map(State, NewAccountMap).
+
+get_executed_trades_num(State)->
+  State#se_server_data.executed_trades_num.
+
+update_executed_trades_num(State) ->
+  NewNum = get_executed_trades_num(State) + 1,
+  State#se_server_data{executed_trades_num = NewNum}.
+
+update_seller_holding(State, SellerAccountId, StockName, Price) ->
+  Holding = get_account_by_id(State, SellerAccountId),
+  {CurMoney, StockList} = Holding,
+  {_, Amount} = lists:keyfind(StockName, 1, StockList),
+  NewStockList = case Amount - 1 of
+    0 -> lists:delete({StockName, Amount} ,StockList);
+    _ -> lists:delete({StockName, Amount} ,StockList) ++ [{StockName, Amount - 1}]
+  end,
+  NewHolding = {CurMoney + Price, NewStockList},
+  set_account_by_id(State, SellerAccountId, NewHolding).
+
+update_buyer_holding(State, BuyerAccountId, StockName, Price) ->
+  Holding = get_account_by_id(State, BuyerAccountId),
+  {CurMoney, StockList} = Holding,
   case lists:keyfind(StockName, 1, StockList) of
-    { _ , Amount} ->
-      NewStockInfo = {StockName , Amount + 1},
-      NewStockList = lists:delete({StockName, Amount}, StockList) ++ [NewStockInfo],
-      State#se_server_data{accounts = maps:update(AccountId, {CurrentMoney, NewStockList}, AccountMap)}
+    false ->
+      NewStockList = StockList ++ [{StockName, 1}],
+      NewHolding = {CurMoney - Price, NewStockList},
+      set_account_by_id(State, BuyerAccountId, NewHolding);
+    {_, Amount} ->
+      NewStockList = lists:delete({StockName, Amount} ,StockList) ++ [{StockName, Amount + 1}],
+      NewHolding = {CurMoney - Price, NewStockList},
+      set_account_by_id(State, BuyerAccountId, NewHolding)
   end.
 
 %% offer utils function
@@ -167,20 +466,10 @@ delete_offer(State, OfferId) ->
   NewOffersMap = maps:remove(OfferId, OffersMap),
   State#se_server_data{offers =(State#se_server_data.offers)#offer_data{offers_map = NewOffersMap}}.
 
-get_offer_data(OffersData ,OfferId) ->
-  maps:get(OfferId , OffersData#offer_data.offers_map).
-
-check_own_stock(StockName, Holding) ->
-  { _, StockList} = Holding,
-  case lists:keyfind(StockName , 1, StockList) of
-    false -> false;
-    {_, Amount} ->
-      if
-        Amount > 0 -> true;
-        true -> false
-      end
-  end.
-
-check_valid_offer(Offer, Holdings) ->
-  {StockName1, _} = Offer,
-  check_own_stock(StockName1, Holdings).
+%% account utils functions
+add_account(State, Server, Holdings) ->
+  Id = get_current_account_num(State) + 1,
+  NewAccountMap = maps:put({Id, Server}, Holdings , get_accounts_map(State)),
+  NewState1 = set_accounts_map(State, NewAccountMap),
+  NewState2 = set_current_account_num(NewState1, Id),
+  {{Id, Server}, NewState2}.
