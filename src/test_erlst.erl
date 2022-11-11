@@ -4,7 +4,9 @@
 
 -export([test_all/0, test_everything/0,generate_stock_name/0 ]).
 -export([prop_value_preservation/0,generate_stock_exchange/0,
-  test_strategy/0,generate_strategy/0, prop_total_trades/0]). % Remember to export the other functions from Q2.2
+  test_strategy/0,generate_strategy/0, prop_total_trades/0,
+  prop_value_preservation_collect_traderlist/0,
+  prop_value_preservation_collect_offerlist/0]). % Remember to export the other functions from Q2.2
 
 
 % You are allowed to split your testing code in as many files as you
@@ -26,12 +28,14 @@ test_everything() ->
 %% offerList [{Holding, AccountId, {{StockName, Price} ,OfferId}}]
 prop_value_preservation() ->
   ?FORALL(
-    {S, TraderList, OfferList},
+    {S, TraderList, OfferList, RemoveTrader, RemoveOffer},
     generate_offer_and_trader2(),
     begin
       TraderHolingMap = calculate_initial_holding_in_traderList(TraderList, maps:new()),
       AllHoldingMap = calculate_initial_holding_in_offerList(OfferList, TraderHolingMap),
       %% we have time-consuming strategy function, so we need to wait at least 1000.
+      remove_trader_from_server(RemoveTrader, TraderList),
+%%      remove_offer_from_server(RemoveOffer, OfferList),
       timer:sleep(100),
       remove_all_trders(TraderList),
       timer:sleep(100),
@@ -46,12 +50,53 @@ prop_value_preservation() ->
     end
   ).
 
+remove_trader_from_server(B, TraderList) ->
+  if B ->
+    case TraderList of
+      [X|_XS] ->
+        {_, AccountId, TraderId} = X,
+        io:format("[test process] remove trader ~n"),
+        erlst:remove_trader(AccountId, TraderId);
+      [] -> nothing
+    end;
+    true -> nothing
+  end.
+
+
+remove_offer_from_server(B, OfferList) ->
+  if B ->
+    case OfferList of
+    [X|_XS] ->
+      {_, AccountId, {_, OfferId}} = X,
+      io:format("[test process] remove offer ~n"),
+      erlst:rescind_offer(AccountId, OfferId);
+    [] -> nothing
+    end;
+    true -> nothing
+  end.
+
+prop_value_preservation_collect_traderlist() ->
+  ?FORALL(
+    {_S, TraderList, _OfferList,_,_},
+    generate_offer_and_trader2(),
+    collect(TraderList, true)
+  ).
+
+prop_value_preservation_collect_offerlist() ->
+  ?FORALL(
+    {_S, _TraderList, OfferList,_,_},
+    generate_offer_and_trader2(),
+    collect(OfferList, true)
+  ).
+
 prop_total_trades() ->
   ?FORALL(
-    {S, _TraderList, OfferList},
+    {S, TraderList, OfferList, RemoveTrader, RemoveOffer},
     generate_offer_and_trader2(),
     begin
       MakeOfferNum = length(OfferList),
+      remove_trader_from_server(RemoveTrader, TraderList),
+%%      remove_offer_from_server(RemoveOffer, OfferList),
       timer:sleep(100),
       FinalTradeNum = erlst:shutdown(S),
       MakeOfferNum >= FinalTradeNum
@@ -201,7 +246,7 @@ generate_trader_list_with_server(S) ->
 
 
 generate_offer_and_trader2() ->
-  ?LET(S, generate_stock_exchange(), {S, generate_trader_list_with_server(S), generate_offer_list_with_server(S)}).
+  ?LET(S, generate_stock_exchange(), {S, generate_trader_list_with_server(S), generate_offer_list_with_server(S), eqc_gen:bool(),  eqc_gen:bool()}).
 
 remove_all_trders(TraderList) ->
   lists:foldl(
